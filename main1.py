@@ -3,8 +3,12 @@ from st_aggrid import AgGrid, GridOptionsBuilder
 from st_aggrid.shared import GridUpdateMode
 from CsvDataReader import CsvDataReader
 from JdceDataReader import JdceDataReader
-import pandas as pd
 from protocol import ProtocolDataExtractor
+import pandas as pd
+from PIL import Image, ImageEnhance
+import tifffile
+import io
+import xml.etree.ElementTree as ET
 
 # Set page config with modern theme
 st.set_page_config(
@@ -14,103 +18,58 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS styling
-st.markdown("""
-<style>
-    .main {
-        background-color: #f8f9fa;
-    }
+# --- TIFF VIEWER (WEB VERSION) ---
+def tiff_viewer_page():
+    st.title("🖼️ TIFF Image Viewer (Web-Based)")
 
-    .stButton>button {
-        border-radius: 25px;
-        padding: 12px 28px;
-        background: linear-gradient(135deg, #6B8DD6 0%, #8E37D7 100%);
-        color: white;
-        border: none;
-        transition: all 0.3s ease;
-        font-weight: 600;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
+    uploaded_file = st.file_uploader("Upload a 16-bit TIFF image", type=["tif", "tiff"])
 
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.2);
-        background: linear-gradient(135deg, #8E37D7 0%, #6B8DD6 100%);
-    }
+    if uploaded_file:
+        try:
+            tiff_bytes = uploaded_file.read()
+            with tifffile.TiffFile(io.BytesIO(tiff_bytes)) as tif:
+                image = tif.pages[0].asarray()
+                metadata_raw = tif.pages[0].tags.get("ImageDescription")
+                description = metadata_raw.value if metadata_raw else None
 
-    .stFileUploader>section>div {
-        border: 2px dashed #6B8DD6;
-        border-radius: 15px;
-        background-color: rgba(107, 141, 214, 0.05);
-    }
+            # Convert to 8-bit for display
+            image_8bit = (image / 256).astype('uint8')
+            pil_img = Image.fromarray(image_8bit)
 
-    h1 {
-        color: #2c3e50;
-        border-bottom: 3px solid #6B8DD6;
-        padding-bottom: 10px;
-        font-size: 2.5rem;
-    }
+            # Adjustments
+            st.sidebar.markdown("### 🔧 Adjustments")
+            brightness = st.sidebar.slider("Brightness", 0.1, 2.0, 1.0)
+            contrast = st.sidebar.slider("Contrast", 0.1, 2.0, 1.0)
 
-    .data-container {
-        background: white;
-        border-radius: 15px;
-        padding: 20px;
-        margin: 15px 0;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-    }
+            pil_img = ImageEnhance.Brightness(pil_img).enhance(brightness)
+            pil_img = ImageEnhance.Contrast(pil_img).enhance(contrast)
 
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
-        border-right: 1px solid #dee2e6;
-    }
+            st.image(pil_img, use_column_width=True, caption="TIFF Preview")
 
-    .filter-section {
-        background: #ffffff;
-        border-radius: 15px;
-        padding: 20px;
-        margin-top: 20px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-</style>
-""", unsafe_allow_html=True)
+            if description:
+                try:
+                    root = ET.fromstring(description)
+                    st.markdown("### 🧬 Metadata")
+                    for prop in root.findall(".//prop"):
+                        st.text(f"{prop.get('id')}: {prop.get('value')}")
+                except ET.ParseError:
+                    st.warning("⚠️ Metadata could not be parsed.")
+        except Exception as e:
+            st.error(f"Failed to process TIFF: {e}")
 
 
-# --- Desktop-only (disabled in cloud)
-def open_tiff_viewer():
-    st.warning("Image Viewer is only available in the desktop version.")
-    # Local-only version (commented for cloud deployment)
-    # import os
-    # import subprocess
-    # import sys
-    # try:
-    #     python_path = os.path.join(os.path.dirname(sys.executable), 'python.exe')
-    #     command = [python_path, "imageData.py"]
-    #     subprocess.Popen(command)
-    #     st.success("🎉 Image viewer launched successfully!")
-    # except Exception as e:
-    #     st.error(f"❌ Failed to open TIFF viewer: {e}")
-
-
-def main_page():
+# --- CSV + JDCE ANALYZER ---
+def main_analyzer_page():
     st.title("🔬 MXA Data Analyzer")
 
-    # Desktop-only viewer button
-    col1, col2 = st.columns([1, 3])
+    col1, col2 = st.columns(2)
     with col1:
-        if st.button("📷 Launch Image Viewer (Desktop Only)"):
-            open_tiff_viewer()
+        with st.expander("📁 Upload JDCE File", expanded=True):
+            jdce_file = st.file_uploader("Select .jdce file", type=["jdce"], label_visibility="collapsed")
+    with col2:
+        with st.expander("📊 Upload CSV File", expanded=True):
+            csv_file = st.file_uploader("Select .csv file", type=["csv"], label_visibility="collapsed")
 
-    # File uploaders
-    with st.container():
-        col1, col2 = st.columns(2)
-        with col1:
-            with st.expander("📁 Upload JDCE File", expanded=True):
-                jdce_file = st.file_uploader("Select .jdce file", type=["jdce"], label_visibility="collapsed")
-        with col2:
-            with st.expander("📊 Upload CSV File", expanded=True):
-                csv_file = st.file_uploader("Select .csv file", type=["csv"], label_visibility="collapsed")
-
-    # Data display
     if jdce_file or csv_file:
         st.markdown("---")
 
@@ -119,7 +78,6 @@ def main_page():
         else:
             col2 = st.container()
 
-        # JDCE Data
         if jdce_file:
             with col1:
                 st.markdown("### 📄 JDCE Data Analysis")
@@ -134,7 +92,6 @@ def main_page():
                             else:
                                 st.write(data)
 
-        # CSV Data
         if csv_file:
             with col2:
                 st.markdown("### 📈 CSV Data Analysis")
@@ -171,15 +128,7 @@ def main_page():
 
                     filtered_df = extracted_csv_data[extracted_csv_data[selected_column] == selected_value]
                     with st.expander(f"📋 Filtered Results for {selected_column} = {selected_value}", expanded=True):
-                        st.dataframe(
-                            filtered_df.style
-                            .set_properties(**{'background-color': '#f8f9fa', 'border': '1px solid #dee2e6'})
-                            .set_table_styles([{
-                                'selector': 'th',
-                                'props': [('background-color', '#6B8DD6'), ('color', 'white')]
-                            }]),
-                            use_container_width=True
-                        )
+                        st.dataframe(filtered_df, use_container_width=True)
                         csv = filtered_df.to_csv(index=False).encode('utf-8')
                         st.download_button(
                             label="📥 Download Filtered Data",
@@ -189,6 +138,7 @@ def main_page():
                         )
 
 
+# --- PROTOCOL PARSER PAGE ---
 def protocol_data_page():
     extractor = ProtocolDataExtractor()
     st.title("⚙️ Protocol Data Explorer")
@@ -210,9 +160,10 @@ def protocol_data_page():
                             st.write(data)
 
 
-# Sidebar Navigation
+# --- SIDEBAR NAVIGATION ---
 page_names_to_funcs = {
-    "🔬 MXA Analyzer": main_page,
+    "🔬 MXA Analyzer": main_analyzer_page,
+    "🖼️ TIFF Viewer": tiff_viewer_page,
     "⚙️ Protocol Data": protocol_data_page,
 }
 
